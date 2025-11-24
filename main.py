@@ -64,18 +64,19 @@ def saati_esitle():
 saati_esitle()
 
 # --- WOLF'UN BEYNİ (FLASH MODELİ - KOTA DOSTU) ---
+# --- WOLF'UN BEYNİ ---
 MODEL_ADI = "models/gemini-2.5-pro" 
 model = genai.GenerativeModel(
     model_name=MODEL_ADI,
-    generation_config={"temperature": 0.5}, 
+    generation_config={"temperature": 0.6}, 
     system_instruction="""
     Sen 'Wolf' kod adlı agresif bir tradersın.
     Görevin: Volatiliteden yararlanıp işlem fırsatı çıkarmak.
     ÇIKTI FORMATI (JSON): [{"symbol": "BTC/USDT", "islem": "LONG/SHORT/YOK", "sebep": "..."}]
     KURALLAR:
-    1. Trend Takibi Esastır: EMA200 ve MACD yönünde işlem ara.
-    2. LONG: Yükseliş trendinde + RSI < 55 + MACD Al veriyorsa.
-    3. SHORT: Düşüş trendinde + RSI > 45 + MACD Sat veriyorsa.
+    1. RSI < 35 ve Destek yakınsa -> LONG.
+    2. RSI > 65 ve Direnç yakınsa -> SHORT.
+    3. Trend Takibi: Fiyat destekten zıplamışsa -> LONG.
     """
 )
 
@@ -303,3 +304,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Kritik Hata: {e}")
         exit(1)
+
