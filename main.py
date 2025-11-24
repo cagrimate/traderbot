@@ -7,12 +7,13 @@ from dotenv import load_dotenv
 import data_feed 
 
 # --- KULLANICI AYARLARI (YÜKSEK RİSK MODU 🔥) ---
-ISLEM_BASINA_YATIRIM = 10  # 10 yerine 100 Dolar basıyoruz! (Kazancı 10'a katlar)
-MAX_ACIK_ISLEM_SAYISI = 5   # Aynı anda 5 işlem (Toplam 500$ risk)
-BEKLEME_SURESI_DK = 40       
-KAR_HEDEFI_YUZDE = 0.05   # %10 Kâr hedefle (Büyük vuruş)
-ZARAR_STOP_YUZDE = 0.02    # %5 Stop (Erken patlamamak için geniş alan)
+ISLEM_BASINA_YATIRIM = 10   # 10 Dolar
+MAX_ACIK_ISLEM_SAYISI = 5   # Maksimum 5 İşlem
+BEKLEME_SURESI_DK = 40      # 40 Dakika bekle (Uzun vade için)
+KAR_HEDEFI_YUZDE = 0.5      # %50 Kâr Hedefi
+ZARAR_STOP_YUZDE = 0.2      # %20 Zarar Kes
 # -----------------------------------------------
+
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 binance_api = os.getenv("BINANCE_API_KEY")
@@ -23,7 +24,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (FİNAL SÜRÜM) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (AKILLI KOTA MODU) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -75,17 +76,14 @@ model = genai.GenerativeModel(
     """
 )
 
-# Global değişken
 kullanilabilir_bakiye = 0 
 
 def kar_zarar_raporu():
     global kullanilabilir_bakiye 
-    
     print("\n" + "="*60)
     print("💰 --- WOLF CÜZDAN DURUMU --- 💰".center(60))
     print("="*60)
     try:
-        # Bakiye Bilgisi
         account_info = exchange.fapiPrivateV2GetAccount({'recvWindow': 60000})
         toplam_varlik = float(account_info['totalMarginBalance'])
         kullanilabilir_bakiye = float(account_info['availableBalance'])
@@ -95,7 +93,6 @@ def kar_zarar_raporu():
         print("-" * 60)
 
         positions_raw = exchange.fapiPrivateV2GetPositionRisk({'recvWindow': 60000})
-        
         print(f"{'COIN':<15} {'YÖN':<8} {'GİRİŞ':<10} {'PNL ($)':<10}")
         print("-" * 60)
 
@@ -117,22 +114,19 @@ def kar_zarar_raporu():
             print("💤 Açık pozisyon yok. Nakitteyiz.")
         
         print("-" * 60)
-        print(f"📊 Doluluk Oranı: {len(acik_pozisyonlar)} / {MAX_ACIK_ISLEM_SAYISI} İşlem")
+        dolu_oran = len(acik_pozisyonlar)
+        print(f"📊 Doluluk Oranı: {dolu_oran} / {MAX_ACIK_ISLEM_SAYISI} İşlem")
         print("=" * 60 + "\n")
         
         return acik_pozisyonlar
         
     except Exception as e:
-        # --- DÜZELTİLEN SATIR BURASI ---
         print(f"⚠️ Cüzdan Hatası: {e}") 
         return []
 
-# --- EMİR GÖNDER ---
 def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
     global kullanilabilir_bakiye
-    
     try:
-        # Bakiye Yetersizse Dur
         if kullanilabilir_bakiye < ISLEM_BASINA_YATIRIM:
             print(f"❌ Yetersiz Bakiye! Gereken: {ISLEM_BASINA_YATIRIM}, Olan: {kullanilabilir_bakiye:.2f}")
             return False
@@ -152,7 +146,6 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         
         side = 'BUY' if islem == 'LONG' else 'SELL'
         
-        # 1. ANA İŞLEM
         params = {
             'symbol': symbol_clean, 'side': side, 'type': 'MARKET',
             'quantity': amount, 'recvWindow': 60000 
@@ -160,10 +153,8 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         order = exchange.fapiPrivatePostOrder(params)
         print(f"   ✅ POZİSYON AÇILDI! (ID: {order['orderId']})")
 
-        # Sanal olarak bakiyeyi düş
         kullanilabilir_bakiye -= ISLEM_BASINA_YATIRIM
 
-        # 2. HESAPLAMALAR
         if islem == "LONG":
             tp_fiyat = giris_fiyati * (1 + KAR_HEDEFI_YUZDE)
             sl_fiyat = giris_fiyati * (1 - ZARAR_STOP_YUZDE)
@@ -176,7 +167,6 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         tp_fiyat = float("{:.4f}".format(tp_fiyat))
         sl_fiyat = float("{:.4f}".format(sl_fiyat))
 
-        # 3. TP EMRİ
         tp_params = {
             'symbol': symbol_clean, 'side': kapatma_yonu, 'type': 'TAKE_PROFIT_MARKET',
             'stopPrice': tp_fiyat, 'closePosition': 'true', 'recvWindow': 60000
@@ -184,7 +174,6 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         exchange.fapiPrivatePostOrder(tp_params)
         print(f"   🎯 HEDEF (TP): {tp_fiyat}  (Kazanç: +{tahmini_kazanc:.2f} $)")
 
-        # 4. SL EMRİ
         sl_params = {
             'symbol': symbol_clean, 'side': kapatma_yonu, 'type': 'STOP_MARKET',
             'stopPrice': sl_fiyat, 'closePosition': 'true', 'recvWindow': 60000
@@ -202,19 +191,20 @@ def botu_calistir():
     acik_coinler = kar_zarar_raporu()
     if acik_coinler is None: acik_coinler = []
     
-    # Kota Kontrolü
+    # --- GÜVENLİK DUVARI: KOTA KONTROLÜ (EN BAŞTA) ---
+    # Eğer kota doluysa, Gemini'ye gitme, piyasayı tarama, direkt uyu.
     su_anki_islem_sayisi = len(acik_coinler)
     if su_anki_islem_sayisi >= MAX_ACIK_ISLEM_SAYISI:
-        print(f"🛑 KOTA DOLU! ({su_anki_islem_sayisi}/{MAX_ACIK_ISLEM_SAYISI})")
-        print("   Yeni işlem açılmayacak, sadece mevcutlar izleniyor.")
-        return 
+        print(f"🛑 KOTA TAMAMEN DOLU! ({su_anki_islem_sayisi}/{MAX_ACIK_ISLEM_SAYISI})")
+        print("   Yeni analiz yapılmayacak. Mevcut pozisyonların kapanması bekleniyor.")
+        return # ÇIKIŞ KAPISI
+    # -------------------------------------------------
     
     print(f"🐺 WOLF PİYASAYI KOKLUYOR... ({time.strftime('%H:%M:%S')})")
     
     piyasa_verileri = data_feed.piyasayi_tara()
     if not piyasa_verileri: return
 
-    # Filtreleme (Cüzdanda olanı ele)
     analiz_edilecekler = []
     for coin in piyasa_verileri:
         coin_temiz_ad = coin['symbol'].split(':')[0].replace('/', '')
@@ -247,7 +237,7 @@ def botu_calistir():
             kararlar = json.loads(temiz_json)
             
             for karar in kararlar:
-                # Döngü İçi Kota Kontrolü
+                # Döngü içinde de kontrol et (Belki o an doldu)
                 if len(acik_coinler) >= MAX_ACIK_ISLEM_SAYISI:
                     print(f"⚠️ İşlem sırasında kota doldu! Kalan analizler pas geçiliyor.")
                     break
@@ -288,14 +278,11 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    while True:
-        try:
-            botu_calistir()
-            print(f"💤 Wolf {BEKLEME_SURESI_DK} dakika dinleniyor... (Durdurmak için CTRL+C)")
-            time.sleep(BEKLEME_SURESI_DK * 60) 
-        except KeyboardInterrupt:
-            print("\n🛑 Bot durduruldu.")
-            break
-        except Exception as e:
-            print(f"\n❌ Hata: {e}")
-            time.sleep(60)
+    # GitHub Actions sonsuz döngüye giremez, tek tur çalışıp kapanır.
+    print("🚀 GitHub Actions Tetiklendi - Wolf İş Başında...")
+    try:
+        botu_calistir()
+        print("🏁 Tur Başarıyla Tamamlandı.")
+    except Exception as e:
+        print(f"❌ Kritik Hata: {e}")
+        exit(1) # Hata olduğunu GitHub'a bildir
