@@ -7,9 +7,9 @@ from dotenv import load_dotenv
 import data_feed 
 
 # --- KULLANICI AYARLARI (YÜKSEK RİSK MODU 🔥) ---
-ISLEM_BASINA_YATIRIM = 10   # 10 Dolar
-MAX_ACIK_ISLEM_SAYISI = 5   # Maksimum 5 İşlem
-BEKLEME_SURESI_DK = 40      # 40 Dakika bekle (Uzun vade için)
+ISLEM_BASINA_YATIRIM = 10   # Her işlem için 10 Dolar
+MAX_ACIK_ISLEM_SAYISI = 5   # En fazla 5 işlem açık olsun
+# BEKLEME SÜRESİ AYARI GITHUB ACTIONS (YAML) DOSYASINDAN YAPILIR
 KAR_HEDEFI_YUZDE = 0.5      # %50 Kâr Hedefi
 ZARAR_STOP_YUZDE = 0.2      # %20 Zarar Kes
 # -----------------------------------------------
@@ -24,7 +24,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (AKILLI KOTA MODU) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (GITHUB ACTIONS MODU) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -43,6 +43,9 @@ exchange.urls['api'] = {
     'public': 'https://testnet.binancefuture.com/fapi/v1',
     'private': 'https://testnet.binancefuture.com/fapi/v1',
     'sapi': 'https://testnet.binancefuture.com/fapi/v1', 
+    'dapiPublic': 'https://testnet.binancefuture.com/dapi/v1',
+    'dapiPrivate': 'https://testnet.binancefuture.com/dapi/v1',
+    'dapiPrivateV2': 'https://testnet.binancefuture.com/dapi/v2',
 }
 
 # --- ZAMAN MAKİNESİ ---
@@ -60,19 +63,19 @@ def saati_esitle():
 
 saati_esitle()
 
-# --- WOLF'UN BEYNİ ---
+# --- WOLF'UN BEYNİ (FLASH MODELİ - KOTA DOSTU) ---
 MODEL_ADI = "models/gemini-2.5-pro" 
 model = genai.GenerativeModel(
     model_name=MODEL_ADI,
-    generation_config={"temperature": 0.6}, 
+    generation_config={"temperature": 0.5}, 
     system_instruction="""
     Sen 'Wolf' kod adlı agresif bir tradersın.
     Görevin: Volatiliteden yararlanıp işlem fırsatı çıkarmak.
     ÇIKTI FORMATI (JSON): [{"symbol": "BTC/USDT", "islem": "LONG/SHORT/YOK", "sebep": "..."}]
     KURALLAR:
-    1. RSI < 35 ve Destek yakınsa -> LONG.
-    2. RSI > 65 ve Direnç yakınsa -> SHORT.
-    3. Trend Takibi: Fiyat destekten zıplamışsa -> LONG.
+    1. Trend Takibi Esastır: EMA200 ve MACD yönünde işlem ara.
+    2. LONG: Yükseliş trendinde + RSI < 55 + MACD Al veriyorsa.
+    3. SHORT: Düşüş trendinde + RSI > 45 + MACD Sat veriyorsa.
     """
 )
 
@@ -188,23 +191,27 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
 
 def botu_calistir():
     saati_esitle()
+    
+    # 1. Cüzdanı ve Açık İşlemleri Kontrol Et
     acik_coinler = kar_zarar_raporu()
     if acik_coinler is None: acik_coinler = []
     
-    # --- GÜVENLİK DUVARI: KOTA KONTROLÜ (EN BAŞTA) ---
-    # Eğer kota doluysa, Gemini'ye gitme, piyasayı tarama, direkt uyu.
+    # --- KRİTİK KORUMA DUVARI (GEMINI TASARRUFU) ---
+    # Eğer 5 işlem varsa, BURADA DURUR. Gemini'ye istek atmaz.
     su_anki_islem_sayisi = len(acik_coinler)
     if su_anki_islem_sayisi >= MAX_ACIK_ISLEM_SAYISI:
         print(f"🛑 KOTA TAMAMEN DOLU! ({su_anki_islem_sayisi}/{MAX_ACIK_ISLEM_SAYISI})")
-        print("   Yeni analiz yapılmayacak. Mevcut pozisyonların kapanması bekleniyor.")
+        print("   Mevcut işlemlerin sonuçlanması bekleniyor. Gemini rahatsız edilmedi.")
         return # ÇIKIŞ KAPISI
     # -------------------------------------------------
     
     print(f"🐺 WOLF PİYASAYI KOKLUYOR... ({time.strftime('%H:%M:%S')})")
     
+    # 2. Sadece kota varsa veri çek
     piyasa_verileri = data_feed.piyasayi_tara()
     if not piyasa_verileri: return
 
+    # 3. Filtrele (Zaten elimde olanı tekrar analiz etme)
     analiz_edilecekler = []
     for coin in piyasa_verileri:
         coin_temiz_ad = coin['symbol'].split(':')[0].replace('/', '')
@@ -217,12 +224,22 @@ def botu_calistir():
             analiz_edilecekler.append(coin)
             
     if not analiz_edilecekler:
-        print("\n🤷‍♂️ Liste boş veya hepsi zaten cüzdanda.")
+        print("\n🤷‍♂️ Liste boş veya tarananların hepsi zaten cüzdanda.")
         return
 
-    prompt = "Analiz et ve JSON formatında karar ver:\n"
+    # 4. Gemini'ye Sor (Sadece boş yer varsa buraya gelir)
+    prompt = "Aşağıdaki teknik verileri analiz et ve kurallara harfiyen uyarak karar ver:\n"
     for coin in analiz_edilecekler:
-        prompt += f"Symbol:{coin['symbol']}, Fiyat:{coin['fiyat']}, RSI:{coin['rsi']:.1f}, Destek:{coin['destek']}, Direnc:{coin['direnc']}\n"
+        prompt += f"""
+        COIN: {coin['symbol']}
+        Fiyat: {coin['fiyat']}
+        RSI (14): {coin['rsi']:.1f}
+        TREND (EMA200): {coin['trend']} 
+        MACD Sinyali: {coin['macd']}
+        Destek: {coin['destek']}
+        Direnç: {coin['direnc']}
+        -------------------
+        """
     
     print(f"\n🧠 {len(analiz_edilecekler)} Coin Analiz Ediliyor... Bekleyin...\n")
 
@@ -237,7 +254,7 @@ def botu_calistir():
             kararlar = json.loads(temiz_json)
             
             for karar in kararlar:
-                # Döngü içinde de kontrol et (Belki o an doldu)
+                # Döngü içinde anlık dolarsa durdur
                 if len(acik_coinler) >= MAX_ACIK_ISLEM_SAYISI:
                     print(f"⚠️ İşlem sırasında kota doldu! Kalan analizler pas geçiliyor.")
                     break
@@ -278,11 +295,11 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    # GitHub Actions sonsuz döngüye giremez, tek tur çalışıp kapanır.
+    # GitHub Actions için TEK SEFERLİK çalıştırma
     print("🚀 GitHub Actions Tetiklendi - Wolf İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
     except Exception as e:
         print(f"❌ Kritik Hata: {e}")
-        exit(1) # Hata olduğunu GitHub'a bildir
+        exit(1)
