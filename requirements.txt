@@ -1,0 +1,4 @@
+ccxt
+google-generativeai
+python-dotenv
+pandas
