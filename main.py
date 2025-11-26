@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import data_feed 
 
 # --- KULLANICI AYARLARI (YÜKSEK RİSK MODU 🔥) ---
-ISLEM_BASINA_YATIRIM = 100   # Her işlem için 10 Dolar
+ISLEM_BASINA_YATIRIM = 10   # Her işlem için 10 Dolar
 MAX_ACIK_ISLEM_SAYISI = 5   # En fazla 5 işlem açık olsun
 # BEKLEME SÜRESİ AYARI GITHUB ACTIONS (YAML) DOSYASINDAN YAPILIR
 KAR_HEDEFI_YUZDE = 0.5      # %50 Kâr Hedefi
@@ -304,5 +304,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Kritik Hata: {e}")
         exit(1)
+
 
 
