@@ -3,7 +3,7 @@ name: Wolf Crypto Bot 🐺
 on:
   # 1. ZAMANLAYICI: Her 20 dakikada bir çalıştır (API kotasını korumak için ideal)
   schedule:
-    - cron: '*/60 * * * *'
+    - cron: '*/10 * * * *'
   
   # 2. MANUEL TETİK: İstersen butona basıp elle çalıştırabilmen için
   workflow_dispatch:
