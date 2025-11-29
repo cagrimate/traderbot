@@ -212,15 +212,27 @@ def botu_calistir():
     piyasa_verileri = data_feed.piyasayi_tara()
     if not piyasa_verileri: return
 
-    # 3. Filtrele (Zaten elimde olanı tekrar analiz etme)
+    # 3. Filtrele (Çürükleri ve zaten elimde olanları ayıkla)
     analiz_edilecekler = []
+    
     for coin in piyasa_verileri:
         coin_temiz_ad = coin['symbol'].split(':')[0].replace('/', '')
+        
+        # --- YENİ EKLENEN KISIM: RSI KONTROLÜ ---
+        # Eğer RSI verisi yoksa veya None ise veya 0 ise bu coini atla!
+        rsi_degeri = coin.get('rsi') 
+        if rsi_degeri is None or rsi_degeri == 0:
+            # İstersen bu satırı yorum satırı yap, ekranı kirletmesin
+            # print(f"⚠️ {coin['symbol']} elendi: RSI Verisi Yok.") 
+            continue 
+        # ----------------------------------------
+
         zaten_var = False
         for acik in acik_coinler:
             if coin_temiz_ad == acik:
                 zaten_var = True
                 break
+        
         if not zaten_var:
             analiz_edilecekler.append(coin)
             
@@ -304,6 +316,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Kritik Hata: {e}")
         exit(1)
+
 
 
 
