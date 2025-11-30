@@ -6,11 +6,11 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import data_feed 
 
-# --- KULLANICI AYARLARI (YÜKSEK RİSK MODU 🔥) ---
+# --- KULLANICI AYARLARI (WOLF AGRESİF MOD 🐺) ---
 ISLEM_BASINA_YATIRIM = 20   # Her işlem için 20 Dolar
 MAX_ACIK_ISLEM_SAYISI = 4   # Maksimum işlem sayısı
-KAR_HEDEFI_YUZDE = 0.075    # %7.5 Kâr Hedefi
-ZARAR_STOP_YUZDE = 0.05     # %5 Zarar Kes (Riske göre biraz daralttım)
+KAR_HEDEFI_YUZDE = 0.08     # %8 Kâr Hedefi
+ZARAR_STOP_YUZDE = 0.05     # %5 Zarar Kes
 # -----------------------------------------------
 
 load_dotenv()
@@ -23,7 +23,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v2.0) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v2.1 - Agresif Mod) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -63,25 +63,31 @@ def saati_esitle():
 
 saati_esitle()
 
-# --- WOLF'UN BEYNİ ---
-MODEL_ADI = "models/gemini-2.0-flash" # Daha hızlı ve ucuz model
+# --- WOLF'UN BEYNİ (YENİ STRATEJİ) ---
+MODEL_ADI = "models/gemini-2.0-flash" 
 model = genai.GenerativeModel(
     model_name=MODEL_ADI,
-    generation_config={"temperature": 0.5}, 
+    generation_config={"temperature": 0.6}, # Biraz daha yaratıcı olsun
     system_instruction="""
-    Sen 'Wolf' kod adlı soğukkanlı bir kripto tradersın.
-    Görevin: Verilen teknik verileri analiz edip işlem kararı vermek.
+    Sen 'Wolf' kod adlı fırsatçı ve trend takipçisi bir kripto tradersın.
+    Görevin: Verilen teknik verileri analiz edip karlılık ihtimali olan işlemleri seçmek.
+    Korkak olma, trend yönündeysen tetiği çek.
     
     ÇIKTI FORMATI (Sadece JSON): 
-    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "RSI aşırı satımda ve ATR yüksek."}]
-    veya işlem yoksa:
-    [{"symbol": "BTC/USDT", "islem": "YOK", "sebep": "Yatay piyasa."}]
+    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "Momentum yukarı, RSI uygun."}]
 
-    KURALLAR:
-    1. RSI < 35 ve Trend YUKSELIŞ ise -> LONG (Dip avcılığı).
-    2. RSI > 65 ve Trend DUSUS ise -> SHORT (Tepki satışı).
-    3. ATR (Volatilite) çok düşükse işlem yapma, sıkışma vardır.
-    4. Trend tersine işlem açarken çok güçlü sinyal ara.
+    KURALLAR (ÖNEMLİ):
+    1. VOLATİLİTE KONTROLÜ: 'ATR Yüzdesi' %0.5'in altındaysa ASLA işlem açma (Ölü coin).
+    
+    2. LONG STRATEJİSİ:
+       - (Trend YUKSELIŞ ve RSI < 70) -> AL (Trende katıl).
+       - (RSI < 35) -> AL (Dip tepkisi).
+       
+    3. SHORT STRATEJİSİ:
+       - (Trend DUSUS ve RSI > 30) -> SAT (Trende katıl).
+       - (RSI > 65) -> SAT (Tepeden dönüş).
+       
+    4. Kararsızsan veya sinyaller çelişiyorsa "YOK" dön.
     """
 )
 
@@ -186,7 +192,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
             'stopPrice': tp_fiyat, 
             'closePosition': 'true', 
             'recvWindow': 60000,
-            'reduceOnly': True # ÖNEMLİ: Pozisyon yoksa yeni işlem açmaz
+            'reduceOnly': True 
         }
         exchange.fapiPrivatePostOrder(tp_params)
         print(f"   🎯 HEDEF (TP): {tp_fiyat}  (Kazanç: +{tahmini_kazanc:.2f} $)")
@@ -199,7 +205,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
             'stopPrice': sl_fiyat, 
             'closePosition': 'true', 
             'recvWindow': 60000,
-            'reduceOnly': True # ÖNEMLİ: Pozisyon yoksa yeni işlem açmaz
+            'reduceOnly': True 
         }
         exchange.fapiPrivatePostOrder(sl_params)
         print(f"   🛡️ STOP (SL) : {sl_fiyat}  (Kayıp : -{tahmini_kayip:.2f} $)")
@@ -248,16 +254,19 @@ def botu_calistir():
         print("\n🤷‍♂️ Liste boş veya uygun aday yok.")
         return
 
-    # --- GEMINI PROMPT (ATR EKLENDİ) ---
-    prompt = "Aşağıdaki teknik verileri analiz et ve kurallara uyarak karar ver. Çıktı saf JSON olmalı.\n"
+    # --- GEMINI PROMPT (ATR YÜZDESİ EKLENDİ) ---
+    prompt = "Aşağıdaki teknik verileri analiz et. Özellikle 'ATR Yüzdesi'ne dikkat et (%0.5 altı ölüdür). Çıktı saf JSON olmalı.\n"
     for coin in analiz_edilecekler:
+        # data_feed.py'den gelen yeni 'atr_yuzde' verisini çekiyoruz
+        atr_p = coin.get('atr_yuzde', 0)
+        
         prompt += f"""
         COIN: {coin['symbol']}
         Fiyat: {coin['fiyat']}
         RSI (14): {coin['rsi']:.1f}
-        TREND (EMA200): {coin['trend']} 
+        TREND: {coin['trend']} 
         MACD: {coin['macd']}
-        ATR (Volatilite): {coin.get('atr', 0):.4f}
+        ATR Yüzdesi (Oynaklık): %{atr_p:.2f}
         Destek: {coin['destek']}
         Direnç: {coin['direnc']}
         -------------------
@@ -270,7 +279,6 @@ def botu_calistir():
         text_response = response.text
         
         # --- JSON TEMİZLEME ---
-        # Gemini bazen ```json etiketi ekler, onu siliyoruz
         text_response = text_response.replace("```json", "").replace("```", "").strip()
         
         baslangic = text_response.find('[')
@@ -295,7 +303,6 @@ def botu_calistir():
                 print(f"📝 SEBEP  : {sebep}")
 
                 if islem in ["LONG", "SHORT"]:
-                    # İlgili coinin güncel fiyatını bul
                     ilgili_veri = next((item for item in piyasa_verileri if item["symbol"] == symbol), None)
                     fiyat = ilgili_veri['fiyat'] if ilgili_veri else 0
 
@@ -303,7 +310,6 @@ def botu_calistir():
                         basarili = emir_gonder_tp_sl(symbol, islem, fiyat)
                         if basarili:
                             acik_coinler.append(symbol.split(':')[0]) 
-                            # Hızlı ardışık işlemde API ban yememek için minik bekleme
                             time.sleep(1)
                     else:
                         print("   ⚠️ Fiyat verisi bulunamadı.")
@@ -317,7 +323,7 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v2.0 İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v2.1 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
