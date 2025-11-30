@@ -7,11 +7,10 @@ from dotenv import load_dotenv
 import data_feed 
 
 # --- KULLANICI AYARLARI (YÜKSEK RİSK MODU 🔥) ---
-ISLEM_BASINA_YATIRIM = 20   # Her işlem için 10 Dolar
-MAX_ACIK_ISLEM_SAYISI = 4   # En fazla 5 işlem açık olsun
-# BEKLEME SÜRESİ AYARI GITHUB ACTIONS (YAML) DOSYASINDAN YAPILIR
-KAR_HEDEFI_YUZDE = 0.075      # %50 Kâr Hedefi
-ZARAR_STOP_YUZDE = 0.1      # %20 Zarar Kes
+ISLEM_BASINA_YATIRIM = 20   # Her işlem için 20 Dolar
+MAX_ACIK_ISLEM_SAYISI = 4   # Maksimum işlem sayısı
+KAR_HEDEFI_YUZDE = 0.075    # %7.5 Kâr Hedefi
+ZARAR_STOP_YUZDE = 0.05     # %5 Zarar Kes (Riske göre biraz daralttım)
 # -----------------------------------------------
 
 load_dotenv()
@@ -24,7 +23,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (GITHUB ACTIONS MODU) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v2.0) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -36,6 +35,7 @@ exchange = ccxt.binance({
     },
 })
 
+# Testnet URL Ayarları
 exchange.urls['api'] = {
     'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
     'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
@@ -48,7 +48,7 @@ exchange.urls['api'] = {
     'dapiPrivateV2': 'https://testnet.binancefuture.com/dapi/v2',
 }
 
-# --- ZAMAN MAKİNESİ ---
+# --- ZAMAN MAKİNESİ (Sync) ---
 def saati_esitle():
     try:
         server_time_req = exchange.fapiPublicGetTime()
@@ -63,20 +63,25 @@ def saati_esitle():
 
 saati_esitle()
 
-# --- WOLF'UN BEYNİ (FLASH MODELİ - KOTA DOSTU) ---
 # --- WOLF'UN BEYNİ ---
-MODEL_ADI = "models/gemini-2.5-pro" 
+MODEL_ADI = "models/gemini-2.0-flash" # Daha hızlı ve ucuz model
 model = genai.GenerativeModel(
     model_name=MODEL_ADI,
-    generation_config={"temperature": 0.6}, 
+    generation_config={"temperature": 0.5}, 
     system_instruction="""
-    Sen 'Wolf' kod adlı agresif bir tradersın.
-    Görevin: Volatiliteden yararlanıp işlem fırsatı çıkarmak.
-    ÇIKTI FORMATI (JSON): [{"symbol": "BTC/USDT", "islem": "LONG/SHORT/YOK", "sebep": "..."}]
+    Sen 'Wolf' kod adlı soğukkanlı bir kripto tradersın.
+    Görevin: Verilen teknik verileri analiz edip işlem kararı vermek.
+    
+    ÇIKTI FORMATI (Sadece JSON): 
+    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "RSI aşırı satımda ve ATR yüksek."}]
+    veya işlem yoksa:
+    [{"symbol": "BTC/USDT", "islem": "YOK", "sebep": "Yatay piyasa."}]
+
     KURALLAR:
-    1. RSI < 35 ve Destek yakınsa -> LONG.
-    2. RSI > 65 ve Direnç yakınsa -> SHORT.
-    3. Trend Takibi: Fiyat destekten zıplamışsa -> LONG.
+    1. RSI < 35 ve Trend YUKSELIŞ ise -> LONG (Dip avcılığı).
+    2. RSI > 65 ve Trend DUSUS ise -> SHORT (Tepki satışı).
+    3. ATR (Volatilite) çok düşükse işlem yapma, sıkışma vardır.
+    4. Trend tersine işlem açarken çok güçlü sinyal ara.
     """
 )
 
@@ -142,7 +147,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         tahmini_kayip = ISLEM_BASINA_YATIRIM * ZARAR_STOP_YUZDE
 
         if SAHTE_ISLEM_MODU:
-            print(f"🛑 [SİMÜLASYON] {symbol} {islem}")
+            print(f"🛑 [SİMÜLASYON] {symbol} {islem} (Bakiye düşmedi)")
             return True
 
         print(f"\n   🎲 İŞLEM BAŞLIYOR ({ISLEM_BASINA_YATIRIM} $)")
@@ -150,15 +155,17 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         
         side = 'BUY' if islem == 'LONG' else 'SELL'
         
+        # 1. ANA İŞLEMİ AÇ
         params = {
             'symbol': symbol_clean, 'side': side, 'type': 'MARKET',
             'quantity': amount, 'recvWindow': 60000 
         }
         order = exchange.fapiPrivatePostOrder(params)
-        print(f"   ✅ POZİSYON AÇILDI! (ID: {order['orderId']})")
+        print(f"   ✅ ANA POZİSYON AÇILDI! (ID: {order['orderId']})")
 
         kullanilabilir_bakiye -= ISLEM_BASINA_YATIRIM
 
+        # TP ve SL Fiyat Hesaplama
         if islem == "LONG":
             tp_fiyat = giris_fiyati * (1 + KAR_HEDEFI_YUZDE)
             sl_fiyat = giris_fiyati * (1 - ZARAR_STOP_YUZDE)
@@ -171,61 +178,62 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         tp_fiyat = float("{:.4f}".format(tp_fiyat))
         sl_fiyat = float("{:.4f}".format(sl_fiyat))
 
+        # 2. TAKE PROFIT (KAR AL) - Reduce Only
         tp_params = {
-            'symbol': symbol_clean, 'side': kapatma_yonu, 'type': 'TAKE_PROFIT_MARKET',
-            'stopPrice': tp_fiyat, 'closePosition': 'true', 'recvWindow': 60000
+            'symbol': symbol_clean, 
+            'side': kapatma_yonu, 
+            'type': 'TAKE_PROFIT_MARKET',
+            'stopPrice': tp_fiyat, 
+            'closePosition': 'true', 
+            'recvWindow': 60000,
+            'reduceOnly': True # ÖNEMLİ: Pozisyon yoksa yeni işlem açmaz
         }
         exchange.fapiPrivatePostOrder(tp_params)
         print(f"   🎯 HEDEF (TP): {tp_fiyat}  (Kazanç: +{tahmini_kazanc:.2f} $)")
 
+        # 3. STOP LOSS (ZARAR DURDUR) - Reduce Only
         sl_params = {
-            'symbol': symbol_clean, 'side': kapatma_yonu, 'type': 'STOP_MARKET',
-            'stopPrice': sl_fiyat, 'closePosition': 'true', 'recvWindow': 60000
+            'symbol': symbol_clean, 
+            'side': kapatma_yonu, 
+            'type': 'STOP_MARKET',
+            'stopPrice': sl_fiyat, 
+            'closePosition': 'true', 
+            'recvWindow': 60000,
+            'reduceOnly': True # ÖNEMLİ: Pozisyon yoksa yeni işlem açmaz
         }
         exchange.fapiPrivatePostOrder(sl_params)
         print(f"   🛡️ STOP (SL) : {sl_fiyat}  (Kayıp : -{tahmini_kayip:.2f} $)")
+        
         return True
             
     except Exception as e:
-        print(f"   ❌ HATA: {e}")
+        print(f"   ❌ EMİR HATASI: {e}")
         return False
 
 def botu_calistir():
     saati_esitle()
     
-    # 1. Cüzdanı ve Açık İşlemleri Kontrol Et
     acik_coinler = kar_zarar_raporu()
     if acik_coinler is None: acik_coinler = []
     
-    # --- KRİTİK KORUMA DUVARI (GEMINI TASARRUFU) ---
-    # Eğer 5 işlem varsa, BURADA DURUR. Gemini'ye istek atmaz.
     su_anki_islem_sayisi = len(acik_coinler)
     if su_anki_islem_sayisi >= MAX_ACIK_ISLEM_SAYISI:
         print(f"🛑 KOTA TAMAMEN DOLU! ({su_anki_islem_sayisi}/{MAX_ACIK_ISLEM_SAYISI})")
-        print("   Mevcut işlemlerin sonuçlanması bekleniyor. Gemini rahatsız edilmedi.")
-        return # ÇIKIŞ KAPISI
-    # -------------------------------------------------
+        return 
     
     print(f"🐺 WOLF PİYASAYI KOKLUYOR... ({time.strftime('%H:%M:%S')})")
     
-    # 2. Sadece kota varsa veri çek
     piyasa_verileri = data_feed.piyasayi_tara()
     if not piyasa_verileri: return
 
-    # 3. Filtrele (Çürükleri ve zaten elimde olanları ayıkla)
     analiz_edilecekler = []
     
     for coin in piyasa_verileri:
         coin_temiz_ad = coin['symbol'].split(':')[0].replace('/', '')
         
-        # --- YENİ EKLENEN KISIM: RSI KONTROLÜ ---
-        # Eğer RSI verisi yoksa veya None ise veya 0 ise bu coini atla!
+        # Hatalı veri veya elde olan coin kontrolü
         rsi_degeri = coin.get('rsi') 
-        if rsi_degeri is None or rsi_degeri == 0:
-            # İstersen bu satırı yorum satırı yap, ekranı kirletmesin
-            # print(f"⚠️ {coin['symbol']} elendi: RSI Verisi Yok.") 
-            continue 
-        # ----------------------------------------
+        if rsi_degeri is None or rsi_degeri == 0: continue 
 
         zaten_var = False
         for acik in acik_coinler:
@@ -237,18 +245,19 @@ def botu_calistir():
             analiz_edilecekler.append(coin)
             
     if not analiz_edilecekler:
-        print("\n🤷‍♂️ Liste boş veya tarananların hepsi zaten cüzdanda.")
+        print("\n🤷‍♂️ Liste boş veya uygun aday yok.")
         return
 
-    # 4. Gemini'ye Sor (Sadece boş yer varsa buraya gelir)
-    prompt = "Aşağıdaki teknik verileri analiz et ve kurallara harfiyen uyarak karar ver:\n"
+    # --- GEMINI PROMPT (ATR EKLENDİ) ---
+    prompt = "Aşağıdaki teknik verileri analiz et ve kurallara uyarak karar ver. Çıktı saf JSON olmalı.\n"
     for coin in analiz_edilecekler:
         prompt += f"""
         COIN: {coin['symbol']}
         Fiyat: {coin['fiyat']}
         RSI (14): {coin['rsi']:.1f}
         TREND (EMA200): {coin['trend']} 
-        MACD Sinyali: {coin['macd']}
+        MACD: {coin['macd']}
+        ATR (Volatilite): {coin.get('atr', 0):.4f}
         Destek: {coin['destek']}
         Direnç: {coin['direnc']}
         -------------------
@@ -259,6 +268,11 @@ def botu_calistir():
     try:
         response = model.generate_content(prompt)
         text_response = response.text
+        
+        # --- JSON TEMİZLEME ---
+        # Gemini bazen ```json etiketi ekler, onu siliyoruz
+        text_response = text_response.replace("```json", "").replace("```", "").strip()
+        
         baslangic = text_response.find('[')
         bitis = text_response.rfind(']')
         
@@ -267,9 +281,8 @@ def botu_calistir():
             kararlar = json.loads(temiz_json)
             
             for karar in kararlar:
-                # Döngü içinde anlık dolarsa durdur
                 if len(acik_coinler) >= MAX_ACIK_ISLEM_SAYISI:
-                    print(f"⚠️ İşlem sırasında kota doldu! Kalan analizler pas geçiliyor.")
+                    print(f"⚠️ Kota doldu!")
                     break
 
                 symbol = karar['symbol']
@@ -281,45 +294,33 @@ def botu_calistir():
                 print(f"🤖 KARAR  : {islem}")
                 print(f"📝 SEBEP  : {sebep}")
 
-                ilgili_veri = None
-                for veri in piyasa_verileri:
-                    veri_adi = veri["symbol"].split(':')[0] 
-                    gemini_adi = symbol.split(':')[0]
-                    if veri_adi == gemini_adi:
-                        ilgili_veri = veri
-                        break
-                
-                fiyat = ilgili_veri['fiyat'] if ilgili_veri else 0
-
                 if islem in ["LONG", "SHORT"]:
+                    # İlgili coinin güncel fiyatını bul
+                    ilgili_veri = next((item for item in piyasa_verileri if item["symbol"] == symbol), None)
+                    fiyat = ilgili_veri['fiyat'] if ilgili_veri else 0
+
                     if fiyat > 0:
                         basarili = emir_gonder_tp_sl(symbol, islem, fiyat)
                         if basarili:
                             acik_coinler.append(symbol.split(':')[0]) 
+                            # Hızlı ardışık işlemde API ban yememek için minik bekleme
+                            time.sleep(1)
                     else:
-                        print("   ⚠️ Fiyat verisi eşleşmedi.")
+                        print("   ⚠️ Fiyat verisi bulunamadı.")
                 
                 print("🔹" * 20 + "\n")
             
         else:
-            print("❌ JSON Alınamadı.")
+            print(f"❌ JSON Format Hatası: {text_response}")
 
     except Exception as e:
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    # GitHub Actions için TEK SEFERLİK çalıştırma
-    print("🚀 GitHub Actions Tetiklendi - Wolf İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v2.0 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
     except Exception as e:
         print(f"❌ Kritik Hata: {e}")
         exit(1)
-
-
-
-
-
-
-
