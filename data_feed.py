@@ -1,7 +1,7 @@
 import ccxt
 import pandas as pd
 import time
-import math # Matematik kütüphanesi eklendi (NaN kontrolü için)
+import math # Matematik kütüphanesi (NaN kontrolü için)
 
 # --- Borsa Bağlantısı ---
 exchange = ccxt.binance({
@@ -98,10 +98,12 @@ def verileri_getir_ve_analiz_et(symbol):
         # --- KALİTE KONTROL (NAN CHECK) ---
         # Eğer hesaplanan değerlerden biri bozuksa (NaN), bu veriyi hiç gönderme!
         if math.isnan(son['rsi']) or math.isnan(son['ema200']) or math.isnan(son['atr']):
-            # Logu kirletmemek için sessizce geçebiliriz veya uyarabiliriz
-            # print(f"⚠️ {symbol} verisi yetersiz (NaN), atlanıyor.")
             return None
         # ----------------------------------
+
+        # --- ATR YÜZDESİ HESAPLAMA (YENİ) ---
+        # Fiyata göre volatilitenin yüzdesi (Örn: %1.5 hareket ediyor)
+        atr_yuzde = (son['atr'] / son['close']) * 100
         
         trend_yonu = "YUKSELIŞ (BULL)" if son['close'] > son['ema200'] else "DUSUS (BEAR)"
         macd_sinyali = "AL" if son['macd'] > son['macd_signal'] else "SAT"
@@ -115,6 +117,7 @@ def verileri_getir_ve_analiz_et(symbol):
             'trend': trend_yonu,      
             'macd': macd_sinyali,     
             'atr': son['atr'],
+            'atr_yuzde': atr_yuzde, # <--- EKLENDİ
             'destek': son_donem['low'].min(), 
             'direnc': son_donem['high'].max()
         }
@@ -127,13 +130,15 @@ def piyasayi_tara():
     print(f"🎯 Ham Liste ({len(av_listesi)} Coin): Taranıyor...")
     
     firsatlar = []
-    print(f"\n{'SYMBOL':<20} | {'FİYAT':<10} | {'RSI':<6} | {'ATR':<8}")
-    print("-" * 55)
+    # Tablo başlığına ATR % sütununu da ekledik
+    print(f"\n{'SYMBOL':<20} | {'FİYAT':<10} | {'RSI':<6} | {'ATR %':<8}")
+    print("-" * 60)
     
     for symbol in av_listesi:
         veri = verileri_getir_ve_analiz_et(symbol)
         if veri:
-            print(f"{symbol:<20} | {veri['fiyat']:<10.4f} | {veri['rsi']:<6.1f} | {veri['atr']:.4f}")
+            # Çıktıda artık ATR Yüzdesini görüyoruz
+            print(f"{symbol:<20} | {veri['fiyat']:<10.4f} | {veri['rsi']:<6.1f} | %{veri['atr_yuzde']:.2f}")
             firsatlar.append(veri)
             
     print(f"\n✅ Analize Hazır Temiz Veri Sayısı: {len(firsatlar)}")
