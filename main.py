@@ -306,4 +306,36 @@ def botu_calistir():
                     # --- KRİTİK DÜZELTME BURADA ---
                     # Gemini'den gelen "PIPPIN/USDT" ile listedeki "PIPPIN/USDT:USDT"yi eşleştirmek için
                     # her ikisinin de sadece ilk kısmına (Split) bakıyoruz.
-                    ilgili_veri = next((item for item in piyasa_verileri if
+                    ilgili_veri = next((item for item in piyasa_verileri if item["symbol"].split(':')[0] == symbol.split(':')[0]), None)
+                    # ------------------------------
+
+                    fiyat = ilgili_veri['fiyat'] if ilgili_veri else 0
+
+                    if fiyat > 0:
+                        # Emir fonksiyonuna ORİJİNAL sembolü (piyasa_verilerinden gelen) gönderiyoruz
+                        # Çünkü Gemini'nin gönderdiği kısa isimle emir açılmaz
+                        gercek_sembol = ilgili_veri['symbol'] 
+                        basarili = emir_gonder_tp_sl(gercek_sembol, islem, fiyat)
+                        
+                        if basarili:
+                            acik_coinler.append(symbol.split(':')[0]) 
+                            time.sleep(1)
+                    else:
+                        print(f"   ⚠️ Fiyat verisi bulunamadı. (Aranan: {symbol})")
+                
+                print("🔹" * 20 + "\n")
+            
+        else:
+            print(f"❌ JSON Format Hatası: {text_response}")
+
+    except Exception as e:
+        print(f"Analiz Hatası: {e}")
+
+if __name__ == "__main__":
+    print("🚀 GitHub Actions Tetiklendi - Wolf v2.2 İş Başında...")
+    try:
+        botu_calistir()
+        print("🏁 Tur Başarıyla Tamamlandı.")
+    except Exception as e:
+        print(f"❌ Kritik Hata: {e}")
+        exit(1)
