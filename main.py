@@ -23,7 +23,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v2.2 - Final Fix) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v2.3 - CRITICAL FIX) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -35,7 +35,6 @@ exchange = ccxt.binance({
     },
 })
 
-# Testnet URL Ayarları
 exchange.urls['api'] = {
     'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
     'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
@@ -141,38 +140,48 @@ def kar_zarar_raporu():
 
 def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
     global kullanilabilir_bakiye
+    
+    # 1. Aşama: Bakiye Kontrolü
+    if kullanilabilir_bakiye < ISLEM_BASINA_YATIRIM:
+        print(f"❌ Yetersiz Bakiye! Gereken: {ISLEM_BASINA_YATIRIM}, Olan: {kullanilabilir_bakiye:.2f}")
+        return False
+
+    symbol_clean = symbol.split(':')[0].replace('/', '')
+    amount = int(ISLEM_BASINA_YATIRIM / giris_fiyati) 
+
+    tahmini_kazanc = ISLEM_BASINA_YATIRIM * KAR_HEDEFI_YUZDE
+    tahmini_kayip = ISLEM_BASINA_YATIRIM * ZARAR_STOP_YUZDE
+
+    if SAHTE_ISLEM_MODU:
+        print(f"🛑 [SİMÜLASYON] {symbol} {islem} (Bakiye düşmedi)")
+        return True
+
+    print(f"\n   🎲 İŞLEM BAŞLIYOR ({ISLEM_BASINA_YATIRIM} $)")
+    print(f"   ⏳ {symbol_clean} için {islem} emri giriliyor...")
+    
+    side = 'BUY' if islem == 'LONG' else 'SELL'
+    
+    # ----------------------------------------------------
+    # KRİTİK BÖLGE: Önce ana işlemi açıyoruz.
+    # Eğer bu başarılı olursa, TP/SL patlasa bile "BAŞARILI" döneceğiz.
+    # ----------------------------------------------------
     try:
-        if kullanilabilir_bakiye < ISLEM_BASINA_YATIRIM:
-            print(f"❌ Yetersiz Bakiye! Gereken: {ISLEM_BASINA_YATIRIM}, Olan: {kullanilabilir_bakiye:.2f}")
-            return False
-
-        # Sembolü temizle (Örn: BTC/USDT:USDT -> BTCUSDT)
-        symbol_clean = symbol.split(':')[0].replace('/', '')
-        amount = int(ISLEM_BASINA_YATIRIM / giris_fiyati) 
-
-        tahmini_kazanc = ISLEM_BASINA_YATIRIM * KAR_HEDEFI_YUZDE
-        tahmini_kayip = ISLEM_BASINA_YATIRIM * ZARAR_STOP_YUZDE
-
-        if SAHTE_ISLEM_MODU:
-            print(f"🛑 [SİMÜLASYON] {symbol} {islem} (Bakiye düşmedi)")
-            return True
-
-        print(f"\n   🎲 İŞLEM BAŞLIYOR ({ISLEM_BASINA_YATIRIM} $)")
-        print(f"   ⏳ {symbol_clean} için {islem} emri giriliyor...")
-        
-        side = 'BUY' if islem == 'LONG' else 'SELL'
-        
-        # 1. ANA İŞLEMİ AÇ
         params = {
             'symbol': symbol_clean, 'side': side, 'type': 'MARKET',
             'quantity': amount, 'recvWindow': 60000 
         }
         order = exchange.fapiPrivatePostOrder(params)
         print(f"   ✅ ANA POZİSYON AÇILDI! (ID: {order['orderId']})")
-
         kullanilabilir_bakiye -= ISLEM_BASINA_YATIRIM
+        
+    except Exception as e:
+        print(f"   ❌ ANA İŞLEM HATASI: {e}")
+        return False # Ana işlem açılmadıysa başarısızdır.
 
-        # TP ve SL Fiyat Hesaplama
+    # ----------------------------------------------------
+    # TP / SL Bölgesi (Hata olsa bile programı durdurmamalı)
+    # ----------------------------------------------------
+    try:
         if islem == "LONG":
             tp_fiyat = giris_fiyati * (1 + KAR_HEDEFI_YUZDE)
             sl_fiyat = giris_fiyati * (1 - ZARAR_STOP_YUZDE)
@@ -185,37 +194,35 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         tp_fiyat = float("{:.4f}".format(tp_fiyat))
         sl_fiyat = float("{:.4f}".format(sl_fiyat))
 
-        # 2. TAKE PROFIT (KAR AL) - Reduce Only
+        # DÜZELTME: 'reduceOnly' parametresi silindi. 'closePosition': 'true' yeterli.
         tp_params = {
             'symbol': symbol_clean, 
             'side': kapatma_yonu, 
             'type': 'TAKE_PROFIT_MARKET',
             'stopPrice': tp_fiyat, 
             'closePosition': 'true', 
-            'recvWindow': 60000,
-            'reduceOnly': True 
+            'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(tp_params)
         print(f"   🎯 HEDEF (TP): {tp_fiyat}  (Kazanç: +{tahmini_kazanc:.2f} $)")
 
-        # 3. STOP LOSS (ZARAR DURDUR) - Reduce Only
         sl_params = {
             'symbol': symbol_clean, 
             'side': kapatma_yonu, 
             'type': 'STOP_MARKET',
             'stopPrice': sl_fiyat, 
             'closePosition': 'true', 
-            'recvWindow': 60000,
-            'reduceOnly': True 
+            'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(sl_params)
         print(f"   🛡️ STOP (SL) : {sl_fiyat}  (Kayıp : -{tahmini_kayip:.2f} $)")
         
-        return True
-            
     except Exception as e:
-        print(f"   ❌ EMİR HATASI: {e}")
-        return False
+        # TP/SL hatası olsa bile işlem açıldı, o yüzden kullanıcı manuel düzeltebilir.
+        print(f"   ⚠️ TP/SL GİRİLEMEDİ (Manuel ekle): {e}")
+
+    # Ana işlem açıldığı için her türlü TRUE dönüyoruz ki KOTA dolsun!
+    return True
 
 def botu_calistir():
     saati_esitle()
@@ -223,9 +230,9 @@ def botu_calistir():
     acik_coinler = kar_zarar_raporu()
     if acik_coinler is None: acik_coinler = []
     
-    su_anki_islem_sayisi = len(acik_coinler)
-    if su_anki_islem_sayisi >= MAX_ACIK_ISLEM_SAYISI:
-        print(f"🛑 KOTA TAMAMEN DOLU! ({su_anki_islem_sayisi}/{MAX_ACIK_ISLEM_SAYISI})")
+    # Başlangıç Kontrolü
+    if len(acik_coinler) >= MAX_ACIK_ISLEM_SAYISI:
+        print(f"🛑 KOTA BAŞLANGIÇTA DOLU! ({len(acik_coinler)}/{MAX_ACIK_ISLEM_SAYISI})")
         return 
     
     print(f"🐺 WOLF PİYASAYI KOKLUYOR... ({time.strftime('%H:%M:%S')})")
@@ -238,7 +245,6 @@ def botu_calistir():
     for coin in piyasa_verileri:
         coin_temiz_ad = coin['symbol'].split(':')[0].replace('/', '')
         
-        # Hatalı veri veya elde olan coin kontrolü
         rsi_degeri = coin.get('rsi') 
         if rsi_degeri is None or rsi_degeri == 0: continue 
 
@@ -289,8 +295,9 @@ def botu_calistir():
             kararlar = json.loads(temiz_json)
             
             for karar in kararlar:
+                # DÖNGÜ İÇİ KOTA KONTROLÜ (GÜNCELLENMİŞ LİSTE İLE)
                 if len(acik_coinler) >= MAX_ACIK_ISLEM_SAYISI:
-                    print(f"⚠️ Kota doldu!")
+                    print(f"⚠️ İŞLEM KOTASI DOLDU! Yeni işlem açılmayacak.")
                     break
 
                 symbol = karar['symbol']
@@ -303,21 +310,16 @@ def botu_calistir():
                 print(f"📝 SEBEP  : {sebep}")
 
                 if islem in ["LONG", "SHORT"]:
-                    # --- KRİTİK DÜZELTME BURADA ---
-                    # Gemini'den gelen "PIPPIN/USDT" ile listedeki "PIPPIN/USDT:USDT"yi eşleştirmek için
-                    # her ikisinin de sadece ilk kısmına (Split) bakıyoruz.
                     ilgili_veri = next((item for item in piyasa_verileri if item["symbol"].split(':')[0] == symbol.split(':')[0]), None)
-                    # ------------------------------
-
                     fiyat = ilgili_veri['fiyat'] if ilgili_veri else 0
 
                     if fiyat > 0:
-                        # Emir fonksiyonuna ORİJİNAL sembolü (piyasa_verilerinden gelen) gönderiyoruz
-                        # Çünkü Gemini'nin gönderdiği kısa isimle emir açılmaz
                         gercek_sembol = ilgili_veri['symbol'] 
                         basarili = emir_gonder_tp_sl(gercek_sembol, islem, fiyat)
                         
                         if basarili:
+                            # İşlem başarılı (veya TP/SL fail olsa bile pozisyon açıldı)
+                            # Listeye ekle ki döngü bir sonraki turda durabilsin!
                             acik_coinler.append(symbol.split(':')[0]) 
                             time.sleep(1)
                     else:
@@ -332,7 +334,7 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v2.2 İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v2.3 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
