@@ -23,7 +23,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v2.1 - Agresif Mod) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v2.2 - Final Fix) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -63,11 +63,11 @@ def saati_esitle():
 
 saati_esitle()
 
-# --- WOLF'UN BEYNİ (YENİ STRATEJİ) ---
+# --- WOLF'UN BEYNİ (STRATEJİ) ---
 MODEL_ADI = "models/gemini-2.0-flash" 
 model = genai.GenerativeModel(
     model_name=MODEL_ADI,
-    generation_config={"temperature": 0.6}, # Biraz daha yaratıcı olsun
+    generation_config={"temperature": 0.6},
     system_instruction="""
     Sen 'Wolf' kod adlı fırsatçı ve trend takipçisi bir kripto tradersın.
     Görevin: Verilen teknik verileri analiz edip karlılık ihtimali olan işlemleri seçmek.
@@ -146,6 +146,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
             print(f"❌ Yetersiz Bakiye! Gereken: {ISLEM_BASINA_YATIRIM}, Olan: {kullanilabilir_bakiye:.2f}")
             return False
 
+        # Sembolü temizle (Örn: BTC/USDT:USDT -> BTCUSDT)
         symbol_clean = symbol.split(':')[0].replace('/', '')
         amount = int(ISLEM_BASINA_YATIRIM / giris_fiyati) 
 
@@ -254,10 +255,9 @@ def botu_calistir():
         print("\n🤷‍♂️ Liste boş veya uygun aday yok.")
         return
 
-    # --- GEMINI PROMPT (ATR YÜZDESİ EKLENDİ) ---
+    # --- GEMINI PROMPT ---
     prompt = "Aşağıdaki teknik verileri analiz et. Özellikle 'ATR Yüzdesi'ne dikkat et (%0.5 altı ölüdür). Çıktı saf JSON olmalı.\n"
     for coin in analiz_edilecekler:
-        # data_feed.py'den gelen yeni 'atr_yuzde' verisini çekiyoruz
         atr_p = coin.get('atr_yuzde', 0)
         
         prompt += f"""
@@ -303,30 +303,7 @@ def botu_calistir():
                 print(f"📝 SEBEP  : {sebep}")
 
                 if islem in ["LONG", "SHORT"]:
-                    ilgili_veri = next((item for item in piyasa_verileri if item["symbol"] == symbol), None)
-                    fiyat = ilgili_veri['fiyat'] if ilgili_veri else 0
-
-                    if fiyat > 0:
-                        basarili = emir_gonder_tp_sl(symbol, islem, fiyat)
-                        if basarili:
-                            acik_coinler.append(symbol.split(':')[0]) 
-                            time.sleep(1)
-                    else:
-                        print("   ⚠️ Fiyat verisi bulunamadı.")
-                
-                print("🔹" * 20 + "\n")
-            
-        else:
-            print(f"❌ JSON Format Hatası: {text_response}")
-
-    except Exception as e:
-        print(f"Analiz Hatası: {e}")
-
-if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v2.1 İş Başında...")
-    try:
-        botu_calistir()
-        print("🏁 Tur Başarıyla Tamamlandı.")
-    except Exception as e:
-        print(f"❌ Kritik Hata: {e}")
-        exit(1)
+                    # --- KRİTİK DÜZELTME BURADA ---
+                    # Gemini'den gelen "PIPPIN/USDT" ile listedeki "PIPPIN/USDT:USDT"yi eşleştirmek için
+                    # her ikisinin de sadece ilk kısmına (Split) bakıyoruz.
+                    ilgili_veri = next((item for item in piyasa_verileri if
