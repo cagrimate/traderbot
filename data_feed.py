@@ -8,7 +8,7 @@ exchange = ccxt.binance({
     'options': {'defaultType': 'future'},
 })
 
-# --- URL AYARLARI (HATA DÜZELTME YAMASI) ---
+# --- URL AYARLARI (BINANCE TESTNET) ---
 exchange.urls['api'] = {
     'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
     'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
@@ -21,7 +21,7 @@ exchange.urls['api'] = {
     'dapiPrivateV2': 'https://testnet.binancefuture.com/dapi/v2',
 }
 
-# --- TEKNİK GÖSTERGELER ---
+# --- TEKNİK GÖSTERGELER (Pandas ile Manuel Hesaplama) ---
 
 def rsi_hesapla(series, period=14):
     delta = series.diff()
@@ -42,24 +42,33 @@ def macd_hesapla(series, fast=12, slow=26, signal=9):
     signal_line = macd.ewm(span=signal, adjust=False).mean()
     return macd, signal_line
 
+def atr_hesapla(df, period=14):
+    """Volatiliteyi ölçmek için Average True Range"""
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    return true_range.ewm(span=period, adjust=False).mean()
+
 # -------------------------------------
 
 def hareketli_coinleri_bul(limit=15):
-    print("📡 Piyasadaki en hareketli coinler ve trendler taranıyor...")
+    print("📡 Piyasadaki en hareketli ve hacimli coinler taranıyor...")
     try:
         tickers = exchange.fetch_tickers()
         usdt_pairs = []
         
-        # --- DÜZELTME BURADA ---
-        # 'endswith' yerine 'in' kullanıyoruz.
-        # Çünkü vadeli işlem isimleri 'BTC/USDT:USDT' şeklinde olabilir.
         for symbol in tickers:
             if '/USDT' in symbol: 
-                # Kaldıraçlı tokenları (UP/DOWN) eleyelim
+                # Kaldıraçlı tokenları ve hacimsizleri ele
                 if 'UP/' not in symbol and 'DOWN/' not in symbol:
-                    usdt_pairs.append(symbol)
+                    # Hacim Filtresi (Testnet'te hacim az olabilir ama yine de 0 olmasın)
+                    quote_volume = tickers[symbol].get('quoteVolume', 0)
+                    if quote_volume is not None and quote_volume > 0: 
+                        usdt_pairs.append(symbol)
         
-        # En çok hareket edenleri sırala
+        # En çok hareket edenleri (Yüzde değişime göre) sırala (Mutlak değer)
         sorted_tickers = sorted(
             usdt_pairs, 
             key=lambda x: abs(tickers[x]['percentage'] if tickers[x]['percentage'] else 0), 
@@ -88,6 +97,9 @@ def verileri_getir_ve_analiz_et(symbol):
         macd, signal = macd_hesapla(df['close'])
         df['macd'] = macd
         df['macd_signal'] = signal
+
+        # 4. ATR (Yeni Eklendi - Risk Yönetimi İçin)
+        df['atr'] = atr_hesapla(df)
         
         son = df.iloc[-1]
         
@@ -97,30 +109,34 @@ def verileri_getir_ve_analiz_et(symbol):
         # MACD Sinyali
         macd_sinyali = "AL" if son['macd'] > son['macd_signal'] else "SAT"
 
+        # Destek/Direnç (Son 50 muma göre daha hassas)
+        son_donem = df.iloc[-50:]
+        
         return {
             'symbol': symbol,
             'fiyat': son['close'],
             'rsi': son['rsi'],
             'trend': trend_yonu,      
             'macd': macd_sinyali,     
-            'destek': df['low'].min(), 
-            'direnc': df['high'].max()
+            'atr': son['atr'], # Volatiliteyi main.py'ye göndereceğiz
+            'destek': son_donem['low'].min(), 
+            'direnc': son_donem['high'].max()
         }
 
     except Exception as e:
+        print(f"Veri Analiz Hatası ({symbol}): {e}")
         return None
 
 def piyasayi_tara():
     av_listesi = hareketli_coinleri_bul()
     print(f"🎯 Hedef Listesi ({len(av_listesi)} Coin Bulundu): {av_listesi}")
-    print(f"\n--- WOLF DERİN ANALİZ YAPIYOR (RSI + EMA + MACD) ---\n")
+    print(f"\n--- WOLF DERİN ANALİZ YAPIYOR (RSI + EMA + MACD + ATR) ---\n")
     
     firsatlar = []
     for symbol in av_listesi:
         veri = verileri_getir_ve_analiz_et(symbol)
         if veri:
-            # Ekranda Trend bilgisini de görelim
-            print(f"{symbol:<18} | Fiyat:{veri['fiyat']:<10.4f} | RSI:{veri['rsi']:.1f} | Trend:{veri['trend']}")
+            print(f"{symbol:<18} | Fiyat:{veri['fiyat']:<10.4f} | RSI:{veri['rsi']:.1f} | ATR:{veri['atr']:.4f}")
             firsatlar.append(veri)
             
     return firsatlar
