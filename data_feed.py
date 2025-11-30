@@ -1,6 +1,7 @@
 import ccxt
 import pandas as pd
 import time
+import math # Matematik kütüphanesi eklendi (NaN kontrolü için)
 
 # --- Borsa Bağlantısı ---
 exchange = ccxt.binance({
@@ -21,7 +22,7 @@ exchange.urls['api'] = {
     'dapiPrivateV2': 'https://testnet.binancefuture.com/dapi/v2',
 }
 
-# --- TEKNİK GÖSTERGELER (Pandas ile Manuel Hesaplama) ---
+# --- TEKNİK GÖSTERGELER ---
 
 def rsi_hesapla(series, period=14):
     delta = series.diff()
@@ -43,7 +44,6 @@ def macd_hesapla(series, fast=12, slow=26, signal=9):
     return macd, signal_line
 
 def atr_hesapla(df, period=14):
-    """Volatiliteyi ölçmek için Average True Range"""
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
@@ -61,14 +61,12 @@ def hareketli_coinleri_bul(limit=15):
         
         for symbol in tickers:
             if '/USDT' in symbol: 
-                # Kaldıraçlı tokenları ve hacimsizleri ele
                 if 'UP/' not in symbol and 'DOWN/' not in symbol:
-                    # Hacim Filtresi (Testnet'te hacim az olabilir ama yine de 0 olmasın)
+                    # Hacim Filtresi: Testnet'te bile olsa 0 hacimli coinleri alma
                     quote_volume = tickers[symbol].get('quoteVolume', 0)
-                    if quote_volume is not None and quote_volume > 0: 
+                    if quote_volume is not None and quote_volume > 1000: # En az 1000$ hacim olsun
                         usdt_pairs.append(symbol)
         
-        # En çok hareket edenleri (Yüzde değişime göre) sırala (Mutlak değer)
         sorted_tickers = sorted(
             usdt_pairs, 
             key=lambda x: abs(tickers[x]['percentage'] if tickers[x]['percentage'] else 0), 
@@ -81,35 +79,33 @@ def hareketli_coinleri_bul(limit=15):
 
 def verileri_getir_ve_analiz_et(symbol):
     try:
-        # Trend analizi için 200+ mum çekiyoruz
-        bars = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=205)
-        if not bars or len(bars) < 200: return None
+        # Daha fazla mum çekelim ki EMA200 kesin hesaplansın
+        bars = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=300)
+        if not bars or len(bars) < 205: return None
         
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # 1. RSI
+        # Göstergeleri Hesapla
         df['rsi'] = rsi_hesapla(df['close'])
-        
-        # 2. EMA 200
         df['ema200'] = ema_hesapla(df['close'], 200)
-        
-        # 3. MACD
         macd, signal = macd_hesapla(df['close'])
         df['macd'] = macd
         df['macd_signal'] = signal
-
-        # 4. ATR (Yeni Eklendi - Risk Yönetimi İçin)
         df['atr'] = atr_hesapla(df)
         
         son = df.iloc[-1]
         
-        # Trend Yönü
-        trend_yonu = "YUKSELIŞ (BULL)" if son['close'] > son['ema200'] else "DUSUS (BEAR)"
+        # --- KALİTE KONTROL (NAN CHECK) ---
+        # Eğer hesaplanan değerlerden biri bozuksa (NaN), bu veriyi hiç gönderme!
+        if math.isnan(son['rsi']) or math.isnan(son['ema200']) or math.isnan(son['atr']):
+            # Logu kirletmemek için sessizce geçebiliriz veya uyarabiliriz
+            # print(f"⚠️ {symbol} verisi yetersiz (NaN), atlanıyor.")
+            return None
+        # ----------------------------------
         
-        # MACD Sinyali
+        trend_yonu = "YUKSELIŞ (BULL)" if son['close'] > son['ema200'] else "DUSUS (BEAR)"
         macd_sinyali = "AL" if son['macd'] > son['macd_signal'] else "SAT"
-
-        # Destek/Direnç (Son 50 muma göre daha hassas)
+        
         son_donem = df.iloc[-50:]
         
         return {
@@ -118,27 +114,29 @@ def verileri_getir_ve_analiz_et(symbol):
             'rsi': son['rsi'],
             'trend': trend_yonu,      
             'macd': macd_sinyali,     
-            'atr': son['atr'], # Volatiliteyi main.py'ye göndereceğiz
+            'atr': son['atr'],
             'destek': son_donem['low'].min(), 
             'direnc': son_donem['high'].max()
         }
 
     except Exception as e:
-        print(f"Veri Analiz Hatası ({symbol}): {e}")
         return None
 
 def piyasayi_tara():
     av_listesi = hareketli_coinleri_bul()
-    print(f"🎯 Hedef Listesi ({len(av_listesi)} Coin Bulundu): {av_listesi}")
-    print(f"\n--- WOLF DERİN ANALİZ YAPIYOR (RSI + EMA + MACD + ATR) ---\n")
+    print(f"🎯 Ham Liste ({len(av_listesi)} Coin): Taranıyor...")
     
     firsatlar = []
+    print(f"\n{'SYMBOL':<20} | {'FİYAT':<10} | {'RSI':<6} | {'ATR':<8}")
+    print("-" * 55)
+    
     for symbol in av_listesi:
         veri = verileri_getir_ve_analiz_et(symbol)
         if veri:
-            print(f"{symbol:<18} | Fiyat:{veri['fiyat']:<10.4f} | RSI:{veri['rsi']:.1f} | ATR:{veri['atr']:.4f}")
+            print(f"{symbol:<20} | {veri['fiyat']:<10.4f} | {veri['rsi']:<6.1f} | {veri['atr']:.4f}")
             firsatlar.append(veri)
             
+    print(f"\n✅ Analize Hazır Temiz Veri Sayısı: {len(firsatlar)}")
     return firsatlar
 
 if __name__ == "__main__":
