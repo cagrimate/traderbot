@@ -27,7 +27,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v3.2 - GENİŞ STOP) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v3.3 - DİL YAMASI) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -342,6 +342,12 @@ def botu_calistir():
                 symbol = karar['symbol']
                 islem = karar['islem']
                 sebep = karar['sebep']
+
+                # --- YAMA: Türkçe/İngilizce Çevirici ---
+                # Gemini bazen "AL" veya "SAT" diyebiliyor, bunu düzeltiyoruz.
+                if islem == "AL": islem = "LONG"
+                if islem == "SAT": islem = "SHORT"
+                # ---------------------------------------
                 
                 print("🔹" * 20)
                 print(f"📌 SEMBOL : {symbol}")
@@ -371,7 +377,7 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v3.2 İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v3.3 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
