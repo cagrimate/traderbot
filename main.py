@@ -6,11 +6,12 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import data_feed 
 
-# --- KULLANICI AYARLARI (WOLF AGRESİF MOD 🐺) ---
+# --- KULLANICI AYARLARI (WOLF v3.1 - NET HEDEF MODU) ---
 ISLEM_BASINA_YATIRIM = 20   # Her işlem için 20 Dolar
 MAX_ACIK_ISLEM_SAYISI = 4   # Maksimum işlem sayısı
-KAR_HEDEFI_YUZDE = 0.08     # %8 Kâr Hedefi
-ZARAR_STOP_YUZDE = 0.05     # %5 Zarar Kes
+# --- BURASI SENİN İSTEDİĞİN AYARLAR ---
+KAR_HEDEFI_YUZDE = 0.03     # %3 Kar görünce kapat (Otomatik)
+ZARAR_STOP_YUZDE = 0.02     # %2 Zarar görünce kapat (Otomatik)
 # -----------------------------------------------
 
 load_dotenv()
@@ -23,7 +24,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v2.4 - KAR SÜPÜRÜCÜ) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v3.1) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -68,25 +69,25 @@ model = genai.GenerativeModel(
     model_name=MODEL_ADI,
     generation_config={"temperature": 0.6},
     system_instruction="""
-    Sen 'Wolf' kod adlı fırsatçı ve trend takipçisi bir kripto tradersın.
-    Görevin: Verilen teknik verileri analiz edip karlılık ihtimali olan işlemleri seçmek.
-    Korkak olma, trend yönündeysen tetiği çek.
+    Sen 'Wolf' kod adlı, hızlı sonuç alan bir 'Scalper' tradersın.
+    Görevin: Küçük ve hızlı fiyat hareketlerini yakalamak.
+    Felsefen: "Vur ve Kaç". %3 karı görünce affetme.
     
     ÇIKTI FORMATI (Sadece JSON): 
-    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "Momentum yukarı, RSI uygun."}]
+    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "RSI uygun, trend yukarı."}]
 
-    KURALLAR (ÖNEMLİ):
-    1. VOLATİLİTE KONTROLÜ: 'ATR Yüzdesi' %0.5'in altındaysa ASLA işlem açma (Ölü coin).
+    KURALLAR (SCALPER):
+    1. VOLATİLİTE: ATR Yüzdesi %0.5 altındaysa İŞLEM AÇMA (Çok yavaş).
     
-    2. LONG STRATEJİSİ:
-       - (Trend YUKSELIŞ ve RSI < 70) -> AL (Trende katıl).
-       - (RSI < 35) -> AL (Dip tepkisi).
+    2. LONG FIRSATI:
+       - (RSI < 35) -> AL (Dip Tepkisi).
+       - (Trend YUKSELIŞ ve RSI 40-60 arası) -> AL (Trend Devamı).
        
-    3. SHORT STRATEJİSİ:
-       - (Trend DUSUS ve RSI > 30) -> SAT (Trende katıl).
-       - (RSI > 65) -> SAT (Tepeden dönüş).
+    3. SHORT FIRSATI:
+       - (RSI > 65) -> SAT (Tepe Tepkisi).
+       - (Trend DUSUS ve RSI 40-60 arası) -> SAT (Trend Devamı).
        
-    4. Kararsızsan veya sinyaller çelişiyorsa "YOK" dön.
+    4. Kararsızsan "YOK" dön.
     """
 )
 
@@ -110,8 +111,8 @@ def kar_zarar_raporu():
         print(f"{'COIN':<15} {'YÖN':<8} {'GİRİŞ':<10} {'PNL ($)':<10}")
         print("-" * 60)
 
-        acik_pozisyonlar_listesi = [] # Sadece isimleri tutar
-        aktif_pozisyon_objeleri = []  # Detaylı objeleri tutar (Süpürücü için)
+        acik_pozisyonlar_listesi = [] 
+        aktif_pozisyon_objeleri = []  
         
         for pos in positions_raw:
             amt = float(pos['positionAmt'])
@@ -147,13 +148,13 @@ def kar_zarar_raporu():
 
 def kar_supurucu(aktif_pozisyonlar):
     """
-    Hedef kârı geçmiş ama kapanmamış (TP emri çalışmamış) pozisyonları manuel kapatır.
+    Yedek Paraşüt: Hedef kârı geçmiş ama kapanmamış pozisyonları manuel kapatır.
     """
     if not aktif_pozisyonlar: return
 
     print("🧹 KAR SÜPÜRÜCÜ DEVREDE: Açık işlemler kontrol ediliyor...")
     
-    # Hedeflenen Dolar Bazlı Kazanç (Örn: 20$ * 0.08 = 1.6$)
+    # Hedef kazanç: %3 (Örn: 20$ * 0.03 = 0.6$)
     hedef_kazanc_usd = ISLEM_BASINA_YATIRIM * KAR_HEDEFI_YUZDE
     
     for pos in aktif_pozisyonlar:
@@ -161,10 +162,9 @@ def kar_supurucu(aktif_pozisyonlar):
         symbol = pos['symbol']
         amt = pos['amt']
         
-        # Eğer kar, hedeften büyükse veya eşitse KAPAT!
-        # (Ufak tolerans için hedefi %90'ı olarak alabiliriz garanti olsun diye ama şimdilik net bakalım)
+        # Eğer kar hedefe ulaştıysa (veya geçtiyse) kapat.
         if pnl >= hedef_kazanc_usd:
-            print(f"🤑 FIRSAT YAKALANDI! {symbol} Kârda ({pnl:.2f} $). TP Emri beklemeden kapatılıyor!")
+            print(f"🤑 FIRSAT YAKALANDI! {symbol} Kârda ({pnl:.2f} $). Hedef: {hedef_kazanc_usd:.2f}$. KAPATILIYOR!")
             try:
                 side = 'SELL' if amt > 0 else 'BUY'
                 params = {
@@ -172,11 +172,11 @@ def kar_supurucu(aktif_pozisyonlar):
                     'quantity': abs(amt), 'reduceOnly': True, 'recvWindow': 60000
                 }
                 exchange.fapiPrivatePostOrder(params)
-                print(f"✅ {symbol} BAŞARIYLA SÜPÜRÜLDÜ (Manuel Kapatıldı).")
+                print(f"✅ {symbol} BAŞARIYLA SÜPÜRÜLDÜ.")
             except Exception as e:
                 print(f"❌ Kapatma Hatası ({symbol}): {e}")
         else:
-            print(f"⏳ {symbol} henüz hedefte değil. (Anlık: {pnl:.2f} / Hedef: {hedef_kazanc_usd:.2f})")
+            print(f"⏳ {symbol} izleniyor. PNL: {pnl:.2f}$ / Hedef: {hedef_kazanc_usd:.2f}$")
     print("-" * 60 + "\n")
 
 def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
@@ -201,6 +201,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
     
     side = 'BUY' if islem == 'LONG' else 'SELL'
     
+    # --- 1. ANA İŞLEMİ AÇ ---
     try:
         params = {
             'symbol': symbol_clean, 'side': side, 'type': 'MARKET',
@@ -214,7 +215,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         print(f"   ❌ ANA İŞLEM HATASI: {e}")
         return False 
 
-    # --- TP / SL BÖLGESİ (GÜNCELLENDİ: Last Price Trigger) ---
+    # --- 2. STOP VE KAR AL EMİRLERİNİ KUR ---
     try:
         if islem == "LONG":
             tp_fiyat = giris_fiyati * (1 + KAR_HEDEFI_YUZDE)
@@ -228,31 +229,31 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         tp_fiyat = float("{:.4f}".format(tp_fiyat))
         sl_fiyat = float("{:.4f}".format(sl_fiyat))
 
-        # TP Emri (workingType: CONTRACT_PRICE -> Ekranda gördüğün fiyata değerse kapatır)
+        # TP Emri (Binance'e: Fiyat buraya gelirse KAR AL)
         tp_params = {
             'symbol': symbol_clean, 
             'side': kapatma_yonu, 
             'type': 'TAKE_PROFIT_MARKET',
             'stopPrice': tp_fiyat, 
             'closePosition': 'true',
-            'workingType': 'CONTRACT_PRICE', # <-- KRİTİK EKLEME
+            'workingType': 'CONTRACT_PRICE', 
             'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(tp_params)
-        print(f"   🎯 HEDEF (TP): {tp_fiyat}  (Kazanç: +{tahmini_kazanc:.2f} $)")
+        print(f"   🎯 HEDEF KURULDU (TP): {tp_fiyat} (Fiyat buraya gelince +{tahmini_kazanc:.2f}$ alıp kapanacak)")
 
-        # SL Emri
+        # SL Emri (Binance'e: Fiyat buraya gelirse ZARARI DURDUR)
         sl_params = {
             'symbol': symbol_clean, 
             'side': kapatma_yonu, 
             'type': 'STOP_MARKET',
             'stopPrice': sl_fiyat, 
             'closePosition': 'true', 
-            'workingType': 'CONTRACT_PRICE', # <-- KRİTİK EKLEME
+            'workingType': 'CONTRACT_PRICE', 
             'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(sl_params)
-        print(f"   🛡️ STOP (SL) : {sl_fiyat}  (Kayıp : -{tahmini_kayip:.2f} $)")
+        print(f"   🛡️ STOP KURULDU (SL) : {sl_fiyat} (Fiyat buraya gelince -{tahmini_kayip:.2f}$ zararla kapanacak)")
         
     except Exception as e:
         print(f"   ⚠️ TP/SL GİRİLEMEDİ (Manuel ekle): {e}")
@@ -262,10 +263,10 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
 def botu_calistir():
     saati_esitle()
     
-    # Cüzdanı çek (Listeyi ve Detay Objelerini al)
+    # Cüzdanı çek
     acik_coin_isimleri, acik_pozisyon_objeleri = kar_zarar_raporu()
     
-    # 1. ÖNCE KARLARI TOPLA (SÜPÜRÜCÜ)
+    # 1. KAR SÜPÜRÜCÜ (Açık işlemleri kontrol et)
     kar_supurucu(acik_pozisyon_objeleri)
 
     if len(acik_coin_isimleri) >= MAX_ACIK_ISLEM_SAYISI:
@@ -368,7 +369,7 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v2.4 İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v3.1 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
