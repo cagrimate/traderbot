@@ -6,12 +6,15 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import data_feed 
 
-# --- KULLANICI AYARLARI (WOLF v3.1 - NET HEDEF MODU) ---
+# --- KULLANICI AYARLARI (1$ KAR / 2$ ZARAR MODU) ---
 ISLEM_BASINA_YATIRIM = 20   # Her işlem için 20 Dolar
 MAX_ACIK_ISLEM_SAYISI = 4   # Maksimum işlem sayısı
-# --- BURASI SENİN İSTEDİĞİN AYARLAR ---
-KAR_HEDEFI_YUZDE = 0.03     # %3 Kar görünce kapat (Otomatik)
-ZARAR_STOP_YUZDE = 0.02     # %2 Zarar görünce kapat (Otomatik)
+
+# --- HESAPLAMA ---
+# 1$ / 20$ = 0.05 (%5)
+# 2$ / 20$ = 0.10 (%10)
+KAR_HEDEFI_YUZDE = 0.05     # %5 Kâr Hedefi (+1 Dolar)
+ZARAR_STOP_YUZDE = 0.10     # %10 Zarar Kes (-2 Dolar - Geniş alan)
 # -----------------------------------------------
 
 load_dotenv()
@@ -24,7 +27,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v3.1) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v3.2 - GENİŞ STOP) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -69,15 +72,15 @@ model = genai.GenerativeModel(
     model_name=MODEL_ADI,
     generation_config={"temperature": 0.6},
     system_instruction="""
-    Sen 'Wolf' kod adlı, hızlı sonuç alan bir 'Scalper' tradersın.
-    Görevin: Küçük ve hızlı fiyat hareketlerini yakalamak.
-    Felsefen: "Vur ve Kaç". %3 karı görünce affetme.
+    Sen 'Wolf' kod adlı kripto tradersın.
+    Görevin: Verilen teknik verileri analiz et ve işlem fırsatı bul.
+    Strateji: Geniş stop aralığımız var, bu yüzden trendin yönüne güveniyorsan işlem aç.
     
     ÇIKTI FORMATI (Sadece JSON): 
-    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "RSI uygun, trend yukarı."}]
+    [{"symbol": "BTC/USDT", "islem": "LONG", "sebep": "Trend yukarı, RSI uygun."}]
 
-    KURALLAR (SCALPER):
-    1. VOLATİLİTE: ATR Yüzdesi %0.5 altındaysa İŞLEM AÇMA (Çok yavaş).
+    KURALLAR:
+    1. VOLATİLİTE: ATR Yüzdesi %0.5 altındaysa İŞLEM AÇMA (Ölü coin).
     
     2. LONG FIRSATI:
        - (RSI < 35) -> AL (Dip Tepkisi).
@@ -148,13 +151,13 @@ def kar_zarar_raporu():
 
 def kar_supurucu(aktif_pozisyonlar):
     """
-    Yedek Paraşüt: Hedef kârı geçmiş ama kapanmamış pozisyonları manuel kapatır.
+    Hedef kârı geçmiş ama kapanmamış pozisyonları manuel kapatır.
     """
     if not aktif_pozisyonlar: return
 
     print("🧹 KAR SÜPÜRÜCÜ DEVREDE: Açık işlemler kontrol ediliyor...")
     
-    # Hedef kazanç: %3 (Örn: 20$ * 0.03 = 0.6$)
+    # Hedeflenen Dolar Bazlı Kazanç (20$ * 0.05 = 1.0$)
     hedef_kazanc_usd = ISLEM_BASINA_YATIRIM * KAR_HEDEFI_YUZDE
     
     for pos in aktif_pozisyonlar:
@@ -162,7 +165,6 @@ def kar_supurucu(aktif_pozisyonlar):
         symbol = pos['symbol']
         amt = pos['amt']
         
-        # Eğer kar hedefe ulaştıysa (veya geçtiyse) kapat.
         if pnl >= hedef_kazanc_usd:
             print(f"🤑 FIRSAT YAKALANDI! {symbol} Kârda ({pnl:.2f} $). Hedef: {hedef_kazanc_usd:.2f}$. KAPATILIYOR!")
             try:
@@ -229,7 +231,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         tp_fiyat = float("{:.4f}".format(tp_fiyat))
         sl_fiyat = float("{:.4f}".format(sl_fiyat))
 
-        # TP Emri (Binance'e: Fiyat buraya gelirse KAR AL)
+        # TP Emri
         tp_params = {
             'symbol': symbol_clean, 
             'side': kapatma_yonu, 
@@ -240,9 +242,9 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
             'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(tp_params)
-        print(f"   🎯 HEDEF KURULDU (TP): {tp_fiyat} (Fiyat buraya gelince +{tahmini_kazanc:.2f}$ alıp kapanacak)")
+        print(f"   🎯 HEDEF KURULDU (TP): {tp_fiyat} (+{tahmini_kazanc:.2f}$)")
 
-        # SL Emri (Binance'e: Fiyat buraya gelirse ZARARI DURDUR)
+        # SL Emri
         sl_params = {
             'symbol': symbol_clean, 
             'side': kapatma_yonu, 
@@ -253,7 +255,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
             'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(sl_params)
-        print(f"   🛡️ STOP KURULDU (SL) : {sl_fiyat} (Fiyat buraya gelince -{tahmini_kayip:.2f}$ zararla kapanacak)")
+        print(f"   🛡️ STOP KURULDU (SL) : {sl_fiyat} (-{tahmini_kayip:.2f}$)")
         
     except Exception as e:
         print(f"   ⚠️ TP/SL GİRİLEMEDİ (Manuel ekle): {e}")
@@ -266,7 +268,7 @@ def botu_calistir():
     # Cüzdanı çek
     acik_coin_isimleri, acik_pozisyon_objeleri = kar_zarar_raporu()
     
-    # 1. KAR SÜPÜRÜCÜ (Açık işlemleri kontrol et)
+    # 1. KAR SÜPÜRÜCÜ
     kar_supurucu(acik_pozisyon_objeleri)
 
     if len(acik_coin_isimleri) >= MAX_ACIK_ISLEM_SAYISI:
@@ -300,7 +302,7 @@ def botu_calistir():
         return
 
     # --- GEMINI PROMPT ---
-    prompt = "Aşağıdaki teknik verileri analiz et. Özellikle 'ATR Yüzdesi'ne dikkat et (%0.5 altı ölüdür). Çıktı saf JSON olmalı.\n"
+    prompt = "Aşağıdaki teknik verileri analiz et. ATR Yüzdesi %0.5 altındaysa işlem açma. Çıktı saf JSON olmalı.\n"
     for coin in analiz_edilecekler:
         atr_p = coin.get('atr_yuzde', 0)
         
@@ -310,7 +312,7 @@ def botu_calistir():
         RSI (14): {coin['rsi']:.1f}
         TREND: {coin['trend']} 
         MACD: {coin['macd']}
-        ATR Yüzdesi (Oynaklık): %{atr_p:.2f}
+        ATR Yüzdesi: %{atr_p:.2f}
         Destek: {coin['destek']}
         Direnç: {coin['direnc']}
         -------------------
@@ -369,7 +371,7 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v3.1 İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v3.2 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
