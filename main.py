@@ -9,12 +9,9 @@ import data_feed
 # --- KULLANICI AYARLARI (1$ KAR / 2$ ZARAR MODU) ---
 ISLEM_BASINA_YATIRIM = 20   # Her işlem için 20 Dolar
 MAX_ACIK_ISLEM_SAYISI = 4   # Maksimum işlem sayısı
-
-# --- HESAPLAMA ---
-# 1$ / 20$ = 0.05 (%5)
-# 2$ / 20$ = 0.10 (%10)
 KAR_HEDEFI_YUZDE = 0.05     # %5 Kâr Hedefi (+1 Dolar)
-ZARAR_STOP_YUZDE = 0.10     # %10 Zarar Kes (-2 Dolar - Geniş alan)
+ZARAR_STOP_YUZDE = 0.10     # %10 Zarar Kes (-2 Dolar)
+KALDIRAC = 20               # Kaldıraç oranı (Hata almamak için sabitliyoruz)
 # -----------------------------------------------
 
 load_dotenv()
@@ -27,7 +24,7 @@ SAHTE_ISLEM_MODU = False
 # --- BAĞLANTILAR ---
 genai.configure(api_key=api_key)
 
-print("🌍 Binance Futures Testnet (WOLF v3.3 - DİL YAMASI) Başlatılıyor...")
+print("🌍 Binance Futures Testnet (WOLF v3.4 - HASSAS MATEMATİK) Başlatılıyor...")
 
 exchange = ccxt.binance({
     'apiKey': binance_api,
@@ -38,6 +35,9 @@ exchange = ccxt.binance({
         'adjustForTimeDifference': False, 
     },
 })
+
+# Piyasaları yükle (Precision ayarları için şart)
+exchange.load_markets()
 
 exchange.urls['api'] = {
     'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
@@ -96,6 +96,15 @@ model = genai.GenerativeModel(
 
 kullanilabilir_bakiye = 0 
 
+def kaldirac_ayarla(symbol):
+    try:
+        exchange.fapiPrivatePostLeverage({
+            'symbol': symbol,
+            'leverage': KALDIRAC
+        })
+    except Exception as e:
+        print(f"⚠️ Kaldıraç Ayarlanamadı ({symbol}): {e}")
+
 def kar_zarar_raporu():
     global kullanilabilir_bakiye 
     print("\n" + "="*60)
@@ -150,23 +159,15 @@ def kar_zarar_raporu():
         return [], []
 
 def kar_supurucu(aktif_pozisyonlar):
-    """
-    Hedef kârı geçmiş ama kapanmamış pozisyonları manuel kapatır.
-    """
     if not aktif_pozisyonlar: return
-
     print("🧹 KAR SÜPÜRÜCÜ DEVREDE: Açık işlemler kontrol ediliyor...")
-    
-    # Hedeflenen Dolar Bazlı Kazanç (20$ * 0.05 = 1.0$)
     hedef_kazanc_usd = ISLEM_BASINA_YATIRIM * KAR_HEDEFI_YUZDE
-    
     for pos in aktif_pozisyonlar:
         pnl = pos['pnl']
         symbol = pos['symbol']
         amt = pos['amt']
-        
         if pnl >= hedef_kazanc_usd:
-            print(f"🤑 FIRSAT YAKALANDI! {symbol} Kârda ({pnl:.2f} $). Hedef: {hedef_kazanc_usd:.2f}$. KAPATILIYOR!")
+            print(f"🤑 FIRSAT YAKALANDI! {symbol} Kârda ({pnl:.2f} $). KAPATILIYOR!")
             try:
                 side = 'SELL' if amt > 0 else 'BUY'
                 params = {
@@ -189,21 +190,29 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         return False
 
     symbol_clean = symbol.split(':')[0].replace('/', '')
-    amount = int(ISLEM_BASINA_YATIRIM / giris_fiyati) 
+    
+    # --- DÜZELTME 1: Kaldıraç Ayarla ---
+    kaldirac_ayarla(symbol_clean)
+
+    # --- DÜZELTME 2: Miktar Hassasiyeti (Precision) ---
+    # Ham miktarı hesapla
+    ham_miktar = (ISLEM_BASINA_YATIRIM * KALDIRAC) / giris_fiyati 
+    # Binance'in istediği formata çevir (Örn: 0.2356 coin)
+    amount = exchange.amount_to_precision(symbol_clean, ham_miktar)
 
     tahmini_kazanc = ISLEM_BASINA_YATIRIM * KAR_HEDEFI_YUZDE
     tahmini_kayip = ISLEM_BASINA_YATIRIM * ZARAR_STOP_YUZDE
 
     if SAHTE_ISLEM_MODU:
-        print(f"🛑 [SİMÜLASYON] {symbol} {islem} (Bakiye düşmedi)")
+        print(f"🛑 [SİMÜLASYON] {symbol} {islem} Miktar: {amount}")
         return True
 
-    print(f"\n   🎲 İŞLEM BAŞLIYOR ({ISLEM_BASINA_YATIRIM} $)")
-    print(f"   ⏳ {symbol_clean} için {islem} emri giriliyor...")
+    print(f"\n   🎲 İŞLEM BAŞLIYOR ({ISLEM_BASINA_YATIRIM} $ - {KALDIRAC}x)")
+    print(f"   ⏳ {symbol_clean} için {islem} emri giriliyor... Miktar: {amount}")
     
     side = 'BUY' if islem == 'LONG' else 'SELL'
     
-    # --- 1. ANA İŞLEMİ AÇ ---
+    # --- 1. ANA İŞLEM ---
     try:
         params = {
             'symbol': symbol_clean, 'side': side, 'type': 'MARKET',
@@ -217,7 +226,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
         print(f"   ❌ ANA İŞLEM HATASI: {e}")
         return False 
 
-    # --- 2. STOP VE KAR AL EMİRLERİNİ KUR ---
+    # --- 2. TP / SL (Hassas Fiyatlandırma) ---
     try:
         if islem == "LONG":
             tp_fiyat = giris_fiyati * (1 + KAR_HEDEFI_YUZDE)
@@ -228,34 +237,28 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
             sl_fiyat = giris_fiyati * (1 + ZARAR_STOP_YUZDE)
             kapatma_yonu = 'BUY'
 
-        tp_fiyat = float("{:.4f}".format(tp_fiyat))
-        sl_fiyat = float("{:.4f}".format(sl_fiyat))
+        # --- DÜZELTME 3: Fiyat Hassasiyeti (Price Precision) ---
+        # 0.000065 gibi küçük rakamları bozmadan stringe çevirir
+        tp_fiyat_str = exchange.price_to_precision(symbol_clean, tp_fiyat)
+        sl_fiyat_str = exchange.price_to_precision(symbol_clean, sl_fiyat)
 
         # TP Emri
         tp_params = {
-            'symbol': symbol_clean, 
-            'side': kapatma_yonu, 
-            'type': 'TAKE_PROFIT_MARKET',
-            'stopPrice': tp_fiyat, 
-            'closePosition': 'true',
-            'workingType': 'CONTRACT_PRICE', 
-            'recvWindow': 60000
+            'symbol': symbol_clean, 'side': kapatma_yonu, 'type': 'TAKE_PROFIT_MARKET',
+            'stopPrice': tp_fiyat_str, 'closePosition': 'true',
+            'workingType': 'CONTRACT_PRICE', 'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(tp_params)
-        print(f"   🎯 HEDEF KURULDU (TP): {tp_fiyat} (+{tahmini_kazanc:.2f}$)")
+        print(f"   🎯 HEDEF (TP): {tp_fiyat_str} (+{tahmini_kazanc:.2f}$)")
 
         # SL Emri
         sl_params = {
-            'symbol': symbol_clean, 
-            'side': kapatma_yonu, 
-            'type': 'STOP_MARKET',
-            'stopPrice': sl_fiyat, 
-            'closePosition': 'true', 
-            'workingType': 'CONTRACT_PRICE', 
-            'recvWindow': 60000
+            'symbol': symbol_clean, 'side': kapatma_yonu, 'type': 'STOP_MARKET',
+            'stopPrice': sl_fiyat_str, 'closePosition': 'true', 
+            'workingType': 'CONTRACT_PRICE', 'recvWindow': 60000
         }
         exchange.fapiPrivatePostOrder(sl_params)
-        print(f"   🛡️ STOP KURULDU (SL) : {sl_fiyat} (-{tahmini_kayip:.2f}$)")
+        print(f"   🛡️ STOP (SL) : {sl_fiyat_str} (-{tahmini_kayip:.2f}$)")
         
     except Exception as e:
         print(f"   ⚠️ TP/SL GİRİLEMEDİ (Manuel ekle): {e}")
@@ -264,11 +267,7 @@ def emir_gonder_tp_sl(symbol, islem, giris_fiyati):
 
 def botu_calistir():
     saati_esitle()
-    
-    # Cüzdanı çek
     acik_coin_isimleri, acik_pozisyon_objeleri = kar_zarar_raporu()
-    
-    # 1. KAR SÜPÜRÜCÜ
     kar_supurucu(acik_pozisyon_objeleri)
 
     if len(acik_coin_isimleri) >= MAX_ACIK_ISLEM_SAYISI:
@@ -284,7 +283,6 @@ def botu_calistir():
     
     for coin in piyasa_verileri:
         coin_temiz_ad = coin['symbol'].split(':')[0].replace('/', '')
-        
         rsi_degeri = coin.get('rsi') 
         if rsi_degeri is None or rsi_degeri == 0: continue 
 
@@ -293,7 +291,6 @@ def botu_calistir():
             if coin_temiz_ad == acik:
                 zaten_var = True
                 break
-        
         if not zaten_var:
             analiz_edilecekler.append(coin)
             
@@ -305,7 +302,6 @@ def botu_calistir():
     prompt = "Aşağıdaki teknik verileri analiz et. ATR Yüzdesi %0.5 altındaysa işlem açma. Çıktı saf JSON olmalı.\n"
     for coin in analiz_edilecekler:
         atr_p = coin.get('atr_yuzde', 0)
-        
         prompt += f"""
         COIN: {coin['symbol']}
         Fiyat: {coin['fiyat']}
@@ -323,8 +319,6 @@ def botu_calistir():
     try:
         response = model.generate_content(prompt)
         text_response = response.text
-        
-        # --- JSON TEMİZLEME ---
         text_response = text_response.replace("```json", "").replace("```", "").strip()
         
         baslangic = text_response.find('[')
@@ -336,18 +330,15 @@ def botu_calistir():
             
             for karar in kararlar:
                 if len(acik_coin_isimleri) >= MAX_ACIK_ISLEM_SAYISI:
-                    print(f"⚠️ İŞLEM KOTASI DOLDU! Yeni işlem açılmayacak.")
+                    print(f"⚠️ İŞLEM KOTASI DOLDU!")
                     break
 
                 symbol = karar['symbol']
                 islem = karar['islem']
                 sebep = karar['sebep']
 
-                # --- YAMA: Türkçe/İngilizce Çevirici ---
-                # Gemini bazen "AL" veya "SAT" diyebiliyor, bunu düzeltiyoruz.
                 if islem == "AL": islem = "LONG"
                 if islem == "SAT": islem = "SHORT"
-                # ---------------------------------------
                 
                 print("🔹" * 20)
                 print(f"📌 SEMBOL : {symbol}")
@@ -367,9 +358,7 @@ def botu_calistir():
                             time.sleep(1)
                     else:
                         print(f"   ⚠️ Fiyat verisi bulunamadı. (Aranan: {symbol})")
-                
                 print("🔹" * 20 + "\n")
-            
         else:
             print(f"❌ JSON Format Hatası: {text_response}")
 
@@ -377,7 +366,7 @@ def botu_calistir():
         print(f"Analiz Hatası: {e}")
 
 if __name__ == "__main__":
-    print("🚀 GitHub Actions Tetiklendi - Wolf v3.3 İş Başında...")
+    print("🚀 GitHub Actions Tetiklendi - Wolf v3.4 İş Başında...")
     try:
         botu_calistir()
         print("🏁 Tur Başarıyla Tamamlandı.")
